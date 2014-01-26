@@ -38,7 +38,7 @@ void addDevice(void)
 
 	/* make the values available on the dbus and get a service name */
 	veDbusItemInit(conn, root);
-	if (!veDbusChangeName(conn, "com.victronenergy.sevcon")) {
+	if (!veDbusChangeName(conn, "com.victronenergy.motordrive")) {
 		printf("dbus_service: registering name failed\n");
 		pltExit(11);
 	}
