@@ -8,15 +8,21 @@
 #include <velib/types/ve_values.h>
 
 typedef struct {
-	VeItem valueA;
-	VeItem valueB;
+	VeItem motorRPM;
+  VeItem motorTemperature;
+  VeItem controllerPower;
+	VeItem controllerDCVoltage;
+	VeItem controllerDCCurrent;
+  VeItem controllerTemperature;
 } Device;
 
 static Device dev;
 
 int32_t motorRPM;
-float motorVoltage;
-float motorCurrent;
+int16_t motorTemperature;
+float controllerDCVoltage;
+float controllerDCCurrent;
+int16_t controllerTemperature;
 
 /* Connect to the dbus and publish some values */
 void addDevice(void)
@@ -27,12 +33,18 @@ void addDevice(void)
 
 	/* Reset Motor values */
 	motorRPM = 0;
-	motorVoltage = 0;
-	motorCurrent = 0;
+	motorTemperature = 0;
+	controllerDCVoltage = 0;
+	controllerDCCurrent = 0;
+	controllerTemperature = 0;
 
 	/* Add values which should be accessible on the dbus */
-	veItemAddChildByUid(root, "Test/ValueA", &dev.valueA);
-	veItemAddChildByUid(root, "Test/ValueB", &dev.valueB);
+	veItemAddChildByUid(root, "Motor/RPM", &dev.motorRPM);
+	veItemAddChildByUid(root, "Motor/Temperature", &dev.motorTemperature);
+	veItemAddChildByUid(root, "Controller/Power", &dev.controllerPower);
+	veItemAddChildByUid(root, "Controller/DC/Voltage", &dev.controllerDCVoltage);
+	veItemAddChildByUid(root, "Controller/DC/Current", &dev.controllerDCCurrent);
+	veItemAddChildByUid(root, "Controller/Temperature", &dev.controllerTemperature);
 
 	/* The ccgx uses the system dbus, a good candidate for an argument */
 #if defined(TARGET_pc)
@@ -63,8 +75,18 @@ void addDevice(void)
 	 * was used it would invoke the callback to send it to the CAN-bus
 	 * again in an attempt to set the value it just received.
 	 */
-	veItemOwnerSet(&dev.valueA, veVariantUn32(&v, 2));
-	veItemOwnerSet(&dev.valueB, veVariantStr(&v, "Example String"));
+	// veItemOwnerSet(&dev.valueA, veVariantUn32(&v, 2));
+	//veItemOwnerSet(&dev.valueB, veVariantStr(&v, "Example String"));
+
+	// Init motor values at 0. TODO change it to invalid, since 
+	// we don't yet have valid comms with the motor controller over 
+	// canbus.
+        veItemOwnerSet(&dev.motorRPM, veVariantSn32(&v, 0));
+        veItemOwnerSet(&dev.motorTemperature, veVariantSn16(&v, 0));
+        veItemOwnerSet(&dev.controllerPower, veVariantFloat(&v, 0));
+        veItemOwnerSet(&dev.controllerDCVoltage, veVariantFloat(&v, 0));
+        veItemOwnerSet(&dev.controllerDCCurrent, veVariantFloat(&v, 0));
+        veItemOwnerSet(&dev.controllerTemperature, veVariantSn16(&v, 0));
 }
 
 /* Called after CAN is already setup */
@@ -77,6 +99,7 @@ void taskInit(void)
 void taskUpdate(void)
 {
 	VeRawCanMsg msg;
+	VeVariant variant;
 
 	while (veCanRead(&msg))
 	{
@@ -87,24 +110,32 @@ void taskUpdate(void)
 		/*	continue; */
 
 		switch (msg.canId)
-		  {
-		  case 0x132: /* Sevcon RPM message convert to signed int32 */
-		    { motorRPM = (msg.mdata[3] << 24) | (msg.mdata[2] << 16) | (msg.mdata[1] << 8) | msg.mdata[0]; }
-		    break;
-		  case 0x162: /* Bat voltage, Contrl Temp, Bat current, Torq */
-		    {
-		      motorVoltage = (float)((signed short)(msg.mdata[1] << 8) | msg.mdata[0]) * 0.0625;
-		      motorCurrent = (float)((signed short)(msg.mdata[4] << 8) | msg.mdata[3]) * 0.0625;
-		    }
-		    break;
-		  }
+		{
+		case 0x132: /* Sevcon RPM message convert to signed int32 */
+		  motorRPM = (msg.mdata[3] << 24) | (msg.mdata[2] << 16) | (msg.mdata[1] << 8) | msg.mdata[0];
+		  veItemOwnerSet(&dev.motorRPM, veVariantSn32(&variant, motorRPM));
+		  break;
+		case 0x162: /* Bat voltage, Contrl Temp, Bat current, Torq */
+		  controllerDCVoltage = (float)((signed short)(msg.mdata[1] << 8) | msg.mdata[0]) * 0.0625;
+		  controllerDCCurrent = (float)((signed short)(msg.mdata[4] << 8) | msg.mdata[3]) * 0.0625;
+		  controllerTemperature = (int32_t)(signed short)(msg.mdata[2]);
+		  veItemOwnerSet(&dev.controllerPower, veVariantFloat(&variant, (controllerDCVoltage*controllerDCCurrent)));
+		  veItemOwnerSet(&dev.controllerDCVoltage, veVariantFloat(&variant, controllerDCVoltage));
+		  veItemOwnerSet(&dev.controllerDCCurrent, veVariantFloat(&variant, controllerDCCurrent));
+		  veItemOwnerSet(&dev.controllerTemperature, veVariantSn16(&variant, controllerTemperature));
+		  break;
+		case 0x248: /* Torque and Motor Temp */
+		  motorTemperature = (int16_t)((signed short)(msg.mdata[3] << 8) | msg.mdata[2]);
+		  veItemOwnerSet(&dev.motorTemperature, veVariantSn16(&variant, motorTemperature));
+		  break;
+		}
 
 		/* printf("msg id:%X dlc:%d flags: %d", msg.canId, msg.length, msg.flags);
 		for (n = 0; n < msg.length; n++)
 			printf(" %02X", msg.mdata[n]);
 			putchar('\n'); */
 
-		printf("Motor rpm: %d voltage: %.1f current: %.1f\n", motorRPM, motorVoltage, motorCurrent);
+		printf("Motor rpm: %d voltage: %.1f current: %.1f conttemp: %d motortemp: %d\n", motorRPM, controllerDCVoltage, controllerDCCurrent, controllerTemperature, motorTemperature);
 		/* note: io has a bunch of helpers to parse a byte array */}
 		
 }
