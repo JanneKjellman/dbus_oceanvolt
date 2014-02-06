@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdint.h>
 
 #include <velib/canhw/canhw.h>
 #include <velib/platform/console.h>
@@ -13,12 +14,21 @@ typedef struct {
 
 static Device dev;
 
+int32_t motorRPM;
+float motorVoltage;
+float motorCurrent;
+
 /* Connect to the dbus and publish some values */
 void addDevice(void)
 {
 	VeItem *root = veValueTree();
 	struct VeDbus *conn;
 	VeVariant v;
+
+	/* Reset Motor values */
+	motorRPM = 0;
+	motorVoltage = 0;
+	motorCurrent = 0;
 
 	/* Add values which should be accessible on the dbus */
 	veItemAddChildByUid(root, "Test/ValueA", &dev.valueA);
@@ -60,8 +70,8 @@ void addDevice(void)
 /* Called after CAN is already setup */
 void taskInit(void)
 {
-	/* normally this is done after a device is found on the CAN bus */
-	addDevice();
+  /* normally this is done after a device is found on the CAN bus */
+  addDevice();
 }
 
 void taskUpdate(void)
@@ -73,16 +83,30 @@ void taskUpdate(void)
 		un8 n;
 
 		/* ignore all 29 bit / extended messages */
-		if (msg.flags & VE_CAN_EXT)
-			continue;
+		/* if (msg.flags & VE_CAN_EXT) */
+		/*	continue; */
 
-		printf("msg id:%X dlc:%d flags: %d", msg.canId, msg.length, msg.flags);
+		switch (msg.canId)
+		  {
+		  case 0x132: /* Sevcon RPM message convert to signed int32 */
+		    { motorRPM = (msg.mdata[3] << 24) | (msg.mdata[2] << 16) | (msg.mdata[1] << 8) | msg.mdata[0]; }
+		    break;
+		  case 0x162: /* Bat voltage, Contrl Temp, Bat current, Torq */
+		    {
+		      motorVoltage = (float)((signed short)(msg.mdata[1] << 8) | msg.mdata[0]) * 0.0625;
+		      motorCurrent = (float)((signed short)(msg.mdata[4] << 8) | msg.mdata[3]) * 0.0625;
+		    }
+		    break;
+		  }
+
+		/* printf("msg id:%X dlc:%d flags: %d", msg.canId, msg.length, msg.flags);
 		for (n = 0; n < msg.length; n++)
 			printf(" %02X", msg.mdata[n]);
-		putchar('\n');
+			putchar('\n'); */
 
-		/* note: io has a bunch of helpers to parse a byte array */
-	}
+		printf("Motor rpm: %d voltage: %.1f current: %.1f\n", motorRPM, motorVoltage, motorCurrent);
+		/* note: io has a bunch of helpers to parse a byte array */}
+		
 }
 
 /* 50ms time progress */
